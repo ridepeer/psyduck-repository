@@ -19,7 +19,7 @@ func TestHTTPChecker(t *testing.T) {
 		t.Errorf("Google on Cybertron was expected as not exists")
 	}
 
-	if err := HTTPChecker("https://www.google.pt", 200, 0, nil).Check(); err != nil {
+	if err := HTTPChecker("http://www.memsql.com", 200, 0, nil).Check(); err != nil {
 		t.Errorf("Google at Portugal was expected as exists, error:%v", err)
 	}
 }

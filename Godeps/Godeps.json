@@ -12,6 +12,24 @@
 			"Rev": "95361a2573b1fa92a00c5fc2707a80308483c6f9"
 		},
 		{
+			"ImportPath": "github.com/franela/goblin",
+			"Comment": "0.0.1-58-gac712d3",
+			"Rev": "ac712d36d1b123f786cbedcfa19b5d25697a14cc"
+		},
+		{
+			"ImportPath": "github.com/franela/goreq",
+			"Rev": "72c51a544272e007ab3da4f7d9ac959b7af7af03"
+		},
+		{
+			"ImportPath": "github.com/onsi/gomega",
+			"Comment": "v1.0-75-g0fe2044",
+			"Rev": "0fe204460da2c8fa1babcaac196e694de8f1aaa1"
+		},
+		{
+			"ImportPath": "golang.org/x/oauth2",
+			"Rev": "8914e5017ca260f2a3a1575b1e6868874050d95e"
+		},
+		{
 			"ImportPath": "github.com/Sirupsen/logrus",
 			"Comment": "v0.7.3",
 			"Rev": "55eb11d21d2a31a3cc93838241d04800f52e823d"
