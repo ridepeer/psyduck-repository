@@ -139,7 +139,7 @@ func (k *PokedexKey) SetContentsFromStream(offset int64, reader io.Reader, conte
 	k.Checksum = metaKey.Checksum
 	k.Modified = metaKey.Modified
 
-	return *metaKey.ContentLength - offset, nil
+	return metaKey.Size() - offset, nil
 }
 
 func (k *PokedexKey) SetContentsFromBytes(newContents []byte, contentType string) error {
@@ -180,6 +180,13 @@ func (k *PokedexKey) Delete() error {
 	}
 	k.deleted = true
 	return nil
+}
+
+func (k *PokedexKey) Size() int64 {
+	if k.ContentLength == nil {
+		return 0
+	}
+	return *k.ContentLength
 }
 
 func (k *PokedexKey) KeyUrl() string {

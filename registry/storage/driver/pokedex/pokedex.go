@@ -1,6 +1,8 @@
 package pokedex
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	goPath "path"
@@ -14,7 +16,10 @@ import (
 	"github.com/docker/distribution/registry/storage/driver/factory"
 )
 
-const driverName = "pokedex"
+const (
+	driverName       = "pokedex"
+	defaultChunkSize = 20 * 1024 * 1024
+)
 
 // The actual driver type along with associated params
 type Driver struct {
@@ -122,10 +127,10 @@ func (d *Driver) PutContent(ctx context.Context, path string, content []byte) er
 	return key.SetContentsFromBytes(content, d.getContentType())
 }
 
-// ReadStream retrieves an io.ReadCloser for the content stored at "path"
+// Reader retrieves an io.ReadCloser for the content stored at "path"
 // with a given byte offset.
 // May be used to resume reading a stream by providing a nonzero offset.
-func (d *Driver) ReadStream(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
+func (d *Driver) Reader(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
 	fullPath := d.makePath(path)
 	key, err := d.Client.GetKey(fullPath)
 	if err != nil {
@@ -137,20 +142,123 @@ func (d *Driver) ReadStream(ctx context.Context, path string, offset int64) (io.
 	return key.GetContentsAsStream(offset)
 }
 
-// WriteStream stores the contents of the provided io.ReadCloser at a
-// location designated by the given path.
-// May be used to resume writing a stream by providing a nonzero offset.
-// The offset must be no larger than the CurrentSize for this path.
-func (d *Driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (nn int64, err error) {
+// Writer returns a FileWriter which will store the content written to it
+// at the location designated by "path" after the call to Commit.
+func (d *Driver) Writer(ctx context.Context, path string, append bool) (storagedriver.FileWriter, error) {
 	fullPath := d.makePath(path)
-	key, err := d.Client.CreateKey(fullPath)
+
+	var (
+		key  *PokedexKey
+		err  error
+		size int64
+	)
+
+	if append {
+		key, err = d.Client.GetKey(fullPath)
+	} else {
+		key, err = d.Client.CreateKey(fullPath)
+	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if key == nil {
-		return 0, storagedriver.PathNotFoundError{Path: path}
+		return nil, storagedriver.PathNotFoundError{Path: path}
 	}
-	return key.SetContentsFromStream(offset, reader, d.getContentType())
+
+	if append {
+		size = key.Size()
+	}
+
+	pw := &pokedexWriter{
+		driver: d,
+		key:    key,
+		size:   size,
+	}
+	return &writer{
+		pw: pw,
+		bw: bufio.NewWriterSize(pw, defaultChunkSize),
+	}, nil
+}
+
+type writer struct {
+	pw        *pokedexWriter
+	bw        *bufio.Writer
+	closed    bool
+	committed bool
+	cancelled bool
+}
+
+func (w *writer) Cancel() error {
+	if w.closed {
+		return fmt.Errorf("already closed")
+	}
+	if w.committed {
+		return fmt.Errorf("already committed")
+	}
+
+	w.cancelled = true
+
+	return w.pw.key.Delete()
+}
+
+func (w *writer) Close() error {
+	if w.closed {
+		return fmt.Errorf("already closed")
+	}
+
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+
+	w.closed = true
+
+	return nil
+}
+
+func (w *writer) Commit() error {
+	if w.closed {
+		return fmt.Errorf("already closed")
+	}
+	if w.committed {
+		return fmt.Errorf("already committed")
+	}
+	if w.cancelled {
+		return fmt.Errorf("already cancelled")
+	}
+
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+
+	w.committed = true
+
+	return nil
+}
+
+func (w *writer) Write(p []byte) (int, error) {
+	if w.closed {
+		return 0, fmt.Errorf("already closed")
+	}
+
+	return w.bw.Write(p)
+}
+
+func (w *writer) Size() int64 {
+	// writer's size should be the sum of the bytes that's been written through the underneath pokedexWriter
+	// and the bytes still in its buffer
+	return w.pw.size + int64(w.bw.Buffered())
+}
+
+type pokedexWriter struct {
+	driver *Driver
+	key    *PokedexKey
+	size   int64
+}
+
+func (pw *pokedexWriter) Write(p []byte) (int, error) {
+	n, err := pw.key.SetContentsFromStream(pw.size, bytes.NewReader(p), pw.driver.getContentType())
+	pw.size += int64(n)
+	return int(n), err
 }
 
 // Stat retrieves the FileInfo for the given path, including the current
@@ -176,7 +284,7 @@ func (d *Driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 			return nil, storagedriver.PathNotFoundError{Path: path}
 		}
 	} else {
-		fi.Size = *key.ContentLength
+		fi.Size = key.Size()
 		fi.ModTime = key.Modified.Time
 	}
 	return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil

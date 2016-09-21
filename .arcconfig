@@ -1,0 +1,4 @@
+{
+  "project_id" : "memsql",
+  "conduit_uri" : "https:\/\/grizzly.memsql.com\/api\/"
+}

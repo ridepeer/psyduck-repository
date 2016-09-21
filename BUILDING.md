@@ -19,6 +19,14 @@ You are expected to know your way around with go & git.
 
 If you are a casual user with no development experience, and no preliminary knowledge of go, building from source is probably not a good solution for you.
 
+## Build registry docker image
+
+    docker build -t $REGISRY_IMAGE_NAME .
+
+If you run into go package not found error, locate the package path and do the following. No need to `git add` the created files though.
+
+    govendor fetch $PACKAGE_PATH
+
 ## Build the development environment
 
 The first prerequisite of properly building distribution targets is to have a Go
