@@ -1,8 +1,6 @@
 package pokedex
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	goPath "path"
@@ -17,8 +15,7 @@ import (
 )
 
 const (
-	driverName       = "pokedex"
-	defaultChunkSize = 20 * 1024 * 1024
+	driverName = "pokedex"
 )
 
 // The actual driver type along with associated params
@@ -145,13 +142,12 @@ func (d *Driver) Reader(ctx context.Context, path string, offset int64) (io.Read
 // Writer returns a FileWriter which will store the content written to it
 // at the location designated by "path" after the call to Commit.
 func (d *Driver) Writer(ctx context.Context, path string, append bool) (storagedriver.FileWriter, error) {
-	fullPath := d.makePath(path)
-
 	var (
-		key  *PokedexKey
-		err  error
-		size int64
+		key *PokedexKey
+		err error
 	)
+
+	fullPath := d.makePath(path)
 
 	if append {
 		key, err = d.Client.GetKey(fullPath)
@@ -165,100 +161,83 @@ func (d *Driver) Writer(ctx context.Context, path string, append bool) (storaged
 		return nil, storagedriver.PathNotFoundError{Path: path}
 	}
 
-	if append {
-		size = key.Size()
-	}
+	size := key.Size()
+	r, w := io.Pipe()
+	term := make(chan error)
 
-	pw := &pokedexWriter{
-		driver: d,
-		key:    key,
-		size:   size,
-	}
+	go func() {
+		_, err := key.SetContentsFromStream(size, r, d.getContentType())
+		term <- err
+	}()
+
 	return &writer{
-		pw: pw,
-		bw: bufio.NewWriterSize(pw, defaultChunkSize),
+		key:  key,
+		pw:   w,
+		size: size,
+		term: term,
 	}, nil
 }
 
 type writer struct {
-	pw        *pokedexWriter
-	bw        *bufio.Writer
-	closed    bool
-	committed bool
+	key       *PokedexKey
+	pw        *io.PipeWriter
+	size      int64
 	cancelled bool
+	committed bool
+	term      chan error
 }
 
+// Cancel removes any written content from this FileWriter.
 func (w *writer) Cancel() error {
-	if w.closed {
-		return fmt.Errorf("already closed")
-	}
-	if w.committed {
-		return fmt.Errorf("already committed")
-	}
+	// close the pipe and wait until ongoing uploads finish
+	// to avoid dangling uploads and goroutines
+	// but ignore the errors
+	w.pw.Close()
+	<-w.term
 
 	w.cancelled = true
 
-	return w.pw.key.Delete()
+	return w.key.Delete()
+}
+
+// Commit flushes all content written to this FileWriter and makes it
+// available for future calls to StorageDriver.GetContent and
+// StorageDriver.Reader.
+func (w *writer) Commit() error {
+	return w.commit()
 }
 
 func (w *writer) Close() error {
-	if w.closed {
-		return fmt.Errorf("already closed")
-	}
-
-	if err := w.bw.Flush(); err != nil {
-		return err
-	}
-
-	w.closed = true
-
-	return nil
+	return w.commit()
 }
 
-func (w *writer) Commit() error {
-	if w.closed {
-		return fmt.Errorf("already closed")
-	}
-	if w.committed {
-		return fmt.Errorf("already committed")
-	}
-	if w.cancelled {
-		return fmt.Errorf("already cancelled")
-	}
-
-	if err := w.bw.Flush(); err != nil {
-		return err
+// storagedriver may or may not call FileWriter.Commit() before Close()
+// check the committed boolean flag to ensure data only commits once.
+// Both Commit() and Close() needs to ensure uploads are finished.
+func (w *writer) commit() error {
+	if w.cancelled || w.committed {
+		return nil
 	}
 
 	w.committed = true
+	err := w.pw.Close()
+	if err != nil {
+		return err
+	}
 
-	return nil
+	// wait until uploads finish
+	return <-w.term
 }
 
 func (w *writer) Write(p []byte) (int, error) {
-	if w.closed {
-		return 0, fmt.Errorf("already closed")
-	}
-
-	return w.bw.Write(p)
+	n, err := w.pw.Write(p)
+	w.size += int64(n)
+	return n, err
 }
 
+// Size returns the number of bytes written to this FileWriter.
 func (w *writer) Size() int64 {
-	// writer's size should be the sum of the bytes that's been written through the underneath pokedexWriter
-	// and the bytes still in its buffer
-	return w.pw.size + int64(w.bw.Buffered())
-}
-
-type pokedexWriter struct {
-	driver *Driver
-	key    *PokedexKey
-	size   int64
-}
-
-func (pw *pokedexWriter) Write(p []byte) (int, error) {
-	n, err := pw.key.SetContentsFromStream(pw.size, bytes.NewReader(p), pw.driver.getContentType())
-	pw.size += int64(n)
-	return int(n), err
+	return w.size
 }
 
 // Stat retrieves the FileInfo for the given path, including the current
